@@ -1,0 +1,181 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports: ["5672:5672","15672:15672"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  kvfront:
+    build: ./kvfront
+    ports: ["9000:9000"]   # il front espone la 9000 all'host
+    environment:
+      BACKENDS: "http://kvstore_a:9000,http://kvstore_b:9000,http://kvstore_c:9000"  # anello di 3 nodi
+      RF: "2"                 # fattore di replica 2
+      READ_REPAIR: "1"        # C2 attivo
+      HINT_FLUSH_SEC: "2"     # C3: flush hint ogni 2s
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      kvstore_a: { condition: service_healthy }
+      kvstore_b: { condition: service_healthy }
+      kvstore_c: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:9000/health').getcode()==200 else sys.exit(1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  kvstore_a:
+    build: ./kvstore
+    expose: ["9000"]
+    ports: ["9001:9000"]
+    environment:
+      DB_FILE: /data/kv_store.db
+      MAX_CACHE_ITEMS: "10000"
+      MAX_CACHE_SIZE_BYTES: "33554432"  # 32MB
+    volumes:
+      - kvstore_a_data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:9000/health').getcode()==200 else sys.exit(1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  kvstore_b:
+    build: ./kvstore
+    expose: ["9000"]
+    ports: ["9002:9000"]
+    environment:
+      DB_FILE: /data/kv_store.db
+      MAX_CACHE_ITEMS: "10000"
+      MAX_CACHE_SIZE_BYTES: "33554432"
+    volumes:
+      - kvstore_b_data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:9000/health').getcode()==200 else sys.exit(1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  kvstore_c:
+    build: ./kvstore
+    expose: ["9000"]
+    ports: ["9003:9000"]
+    environment:
+      DB_FILE: /data/kv_store.db
+      MAX_CACHE_ITEMS: "10000"
+      MAX_CACHE_SIZE_BYTES: "33554432"
+    volumes:
+      - kvstore_c_data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:9000/health').getcode()==200 else sys.exit(1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  gateway:
+    build: ./gateway
+    environment:
+      RABBIT_URL: amqp://guest:guest@rabbitmq/
+      KV_URL: http://kvfront:9000
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+      kvfront:  { condition: service_healthy }
+    expose: ["8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/health').getcode()==200 else sys.exit(1)"]
+      interval: 5s
+      timeout: 5s
+      start_period: 20s
+      retries: 30
+    restart: unless-stopped
+
+  dispatcher:
+    build: ./dispatcher
+    environment:
+      RABBIT_URL: amqp://guest:guest@rabbitmq/
+      KV_URL: http://kvfront:9000
+      PYTHONUNBUFFERED: "1"
+
+      DRONE_POOL_MAX: "18"
+      BASE_ACTIVE: "6"
+      SCALE_RATIO: "1"
+      AUTOSCALE_INTERVAL: "2"
+      AUTOSCALE_DISABLED: "0"
+      EARLY_CHARGE_THRESHOLD: "5"
+      DEBUG_CHARGE: "1"
+
+      CRITICAL_BATTERY: "30"
+      DISCHARGE_PER_TICK: "1.0"
+      CHARGE_PER_TICK: "5.0"
+      FULL_AFTER: "95.0"
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+      kvfront:  { condition: service_healthy }
+    restart: unless-stopped
+
+  drone:
+    build: ./drone_sim
+    environment:
+      KV_URL: http://kvfront:9000
+      RABBIT_URL: amqp://guest:guest@rabbitmq/
+      DRONE_POOL_MAX: "18"
+      BASE_ACTIVE: "6"
+      PYTHONUNBUFFERED: "1"
+      DRONE_TICK_SEC: "0.375"
+      SPEED_BASE_KMH: "120"
+      BATTERY_PER_KM: "2"
+    depends_on:
+      kvfront:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  lb:
+    build: ./lb
+    ports: ["8080:8080"]
+    environment:
+      TARGET_URL: http://gateway:8000
+      PYTHONUNBUFFERED: "1"
+      RL_GLOBAL_RATE: "0"
+      RL_GLOBAL_BURST: "0"
+      RL_CLIENT_RATE: "0"
+      RL_CLIENT_BURST: "0"
+    depends_on:
+      gateway:
+        condition: service_healthy
+
+  ordergen_bursty:
+    build: ./ordergen
+    environment:
+      LB_URL: http://lb:8080
+      PYTHONUNBUFFERED: "1"
+      LOW_RPS:   "0.2"
+      PEAK_RPS:  "2"
+      LOW1_SEC:  "30"
+      PEAK_SEC:  "7"
+      LOW2_SEC:  "20"
+      SILENT_SEC: "60"
+      TOTAL: "0"
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+  
+
+volumes:
+  kvstore_a_data:
+  kvstore_b_data:
+  kvstore_c_data:

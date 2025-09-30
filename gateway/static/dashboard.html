@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>DroneDispatch — Dashboard</title>
+
+<!-- sezione css-->
+<style>
+:root{
+  --bg:#0b0f17; --panel:#121826; --muted:#9aa4b2; --text:#e5e7eb;
+  --accent:#5eead4; --border:#1f2937; --ok:#22c55e; --warn:#f59e0b; --info:#60a5fa; --bad:#ef4444;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,Arial,sans-serif}
+header{display:flex;justify-content:space-between;align-items:center;padding:18px 22px;border-bottom:1px solid var(--border);background:linear-gradient(180deg,#0b0f17,#0b0f1700)}
+h1{font-size:18px;margin:0;letter-spacing:.2px}
+.badge{padding:2px 8px;border-radius:999px;font-size:12px}
+.container{padding:20px;max-width:1400px;margin:0 auto}
+.grid{
+  display:grid;
+  grid-template-columns: repeat(auto-fit, minmax(520px, 1fr));
+  gap:18px;
+}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:14px;overflow:hidden}
+.card h2{font-size:15px;margin:0;padding:12px 14px;border-bottom:1px solid var(--border);color:#cbd5e1;display:flex;align-items:center;gap:8px}
+.card .body{padding:12px 14px}
+.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:18px}
+.kpi{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px}
+.kpi .label{font-size:12px;color:var(--muted)}
+.kpi .value{font-size:18px;margin-top:4px}
+table{width:100%;border-collapse:collapse}
+th,td{padding:8px 10px;border-bottom:1px solid var(--border);font-size:13px;vertical-align:top}
+th{color:#cbd5e1;text-align:left;font-weight:600;background:#0f1524;position:sticky;top:0}
+tbody tr:hover{background:#0f1524}
+.status{font-weight:600}
+.pending{background:#3a2f06;color:#facc15}
+.assigned{background:#0b314a;color:#7dd3fc}
+.in_flight{background:#11320f;color:#86efac}
+.delivered{background:#10333a;color:#67e8f9}
+.idle{color:#a7f3d0}
+.busy{color:#93c5fd}
+.charging{color:#fde68a}
+.retiring{color:#9ca3af}
+.footer{color:var(--muted);font-size:12px;margin-top:12px;text-align:right}
+.controls{display:flex;align-items:center;gap:10px}
+button{background:transparent;border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:8px;cursor:pointer}
+button:hover{background:#0f1524}
+.small{font-size:12px;color:var(--muted)}
+.nowrap{white-space:nowrap}
+.scroll{max-height:380px;overflow:auto}
+.grid .card.full { grid-column: 1 / -1; }
+
+.alert{background:#2b1b1b;border:1px solid #7f1d1d;color:#fecaca;padding:8px 12px;border-radius:10px;margin:10px 0;display:none}
+.alert.show{display:block}
+
+.conn-ok{color:var(--ok)}
+.conn-bad{color:var(--bad)}
+
+@media (max-width: 1140px){
+  .kpis{grid-template-columns:repeat(3,1fr)}
+}
+</style>
+<!--fine sezione css-->
+<!-- aggiunge la mappa-->
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
+<style>
+  #lmap{height:420px;width:100%;border:1px solid var(--border);border-radius:12px;margin:12px 0}
+  .zlabel{background:transparent;border:none;color:#9aa4b2;font-weight:600;text-shadow:0 1px 2px #000a}
+</style>
+<!--fine sezione aggiunta mappa-->
+</head>
+
+
+<body>
+<header>
+  <h1>DroneDispatch — Dashboard</h1>
+  <div class="controls">
+    <span class="small">Aggiornamento: <span id="last-refresh" class="nowrap">–</span></span>
+    <button onclick="load(true)">Aggiorna</button>
+  </div>
+</header>
+
+<div class="container">
+
+  <div id="err" class="alert"></div> <!-- ADDED: banner errori -->
+  
+  <!--sezione che definisce i kpi in alto per tenere traccia del numero di droni nei vari stati e il numero di consegne in coda-->
+  <div class="kpis">
+    <div class="kpi"><div class="label">Droni Totali</div><div class="value" id="k-total-drones">0</div></div>
+    <div class="kpi"><div class="label">Idle</div><div class="value" id="k-idle">0</div></div>
+    <div class="kpi"><div class="label">Busy</div><div class="value" id="k-busy">0</div></div>
+    <div class="kpi"><div class="label">Charging</div><div class="value" id="k-charging">0</div></div>
+    <div class="kpi"><div class="label">Retiring</div><div class="value" id="k-retiring">0</div></div>
+    <div class="kpi"><div class="label">Ordini in coda</div><div class="value" id="k-pending">0</div></div>
+  </div>
+  <!---->
+
+  <div class="grid">
+    <!--Tabella deliveries-->
+    <div class="card">
+      <h2>Deliveries</h2>
+      <div class="body scroll">
+        <table>
+          <thead>
+            <tr><th>ID</th><th>Status</th><th>Drone</th><th>Peso</th><th>Time</th><th>OrigZone</th><th>DestZone</th></tr>
+          </thead>
+          <tbody id="tbl-del"></tbody>
+        </table>
+      </div>
+      <div class="footer small">Ultime 30 per ordine di arrivo</div>
+    </div>
+    <!---->
+    <!--Tabella droni-->
+    <div class="card">
+      <h2> Drones</h2>
+      <div class="body scroll">
+        <table>
+          <thead>
+            <tr><th>ID</th><th>Type</th><th>Zone</th><th>Status</th><th>Battery</th><th>Current</th><th>Lat</th><th>Lon</th></tr>
+          </thead>
+          <tbody id="tbl-dr"></tbody>
+        </table>
+      </div>
+      <div class="footer small">Aggiornato ogni 1s • Connessione: <span id="conn" class="conn-bad">—</span></div>
+    </div>
+    <!---->
+    <!--sezione mappa-->
+    <div class="card full">
+      <h2>🗺️ Mappa (zone + droni)</h2>
+      <div class="body">
+        <div id="lmap"></div>
+      </div>
+      <div class="footer small">Auto-refresh con i dati correnti</div>
+    </div>
+    <!---->
+  </div>
+</div>
+
+<script>
+// ====== CONFIG BASE URL ======
+// CHANGED: usa sempre l'origine corrente (funziona dietro LB e con 3 gateway)
+const API = window.location.origin; //rappresenta l’origine della pagina dashboard ovvero protocollo + host + porta da cui è stata caricata la dashboard.
+
+function fmtId(id){ return (id||'').slice(0,8) + (id&&id.length>8 ? '…' : ''); }
+function clsStatus(s){ return (s||'').replace(' ','_'); }
+function num(x){ return isFinite(x)? x : 0; }
+
+const errBox = document.getElementById('err');
+function showErr(msg){
+  errBox.textContent = msg;
+  errBox.classList.add('show');
+}
+function clearErr(){
+  errBox.classList.remove('show');
+  errBox.textContent = '';
+}
+
+// === Flash viola tracking (delivery appena completate) ===
+const FLASH_MS = 1000;
+const flashPurple = new Set();
+let lastDeliveredIds = new Set();
+
+// CHANGED: funzione che effettua fetch costruendo prima il path e gestisce errori (meglio di fetch)
+async function apiGet(path){
+  const res = await fetch(`${API}${path}`); //Manda una richiesta HTTP all’url che gli passi e restituisce un oggetto response (non i dati)
+  if(!res.ok) throw new Error(`${path} -> HTTP ${res.status}`);
+  return res.json();
+}
+
+async function load(manual=false){
+  try{
+    clearErr();
+    // assicura la mappa pronta (Leaflet + /zones)
+    try { await ensureMapReady(); } catch(e) {
+      // se lo /zones non è pronto non bloccare tutto
+      console.warn('zones not ready yet:', e.message);
+    }
+
+    // CHANGED: /deliveries?limit=200 per avere storico sufficiente
+    const [dels, drs] = await Promise.all([ //con promise all le due fetch partono insieme
+      apiGet('/deliveries?limit=200'), //È l’endpoint REST che restituisce fino a 200 consegne recenti. (Per costruire le tabelle deliveries nella dashboard, e calcolare KPI)
+      apiGet('/drones') //È l’endpoint che restituisce lo stato attuale della flotta di droni. (Per popolare la tabella Drones, aggiornare le KPI)
+    ]);
+
+    const di = (dels.items||[]); //deliveries array
+    const ri = (drs.items||[]); //drones array
+    const k  = (id)=>document.getElementById(id);
+    const cnt= (arr, st)=>arr.filter(d=> (d.status||'')===st).length; 
+
+    // ==== KPI (vengono popolate le KPI) ====
+    k('k-total-drones').textContent = ri.length;
+    k('k-idle').textContent        = ri.filter(x=>x.status==='idle').length;
+    k('k-busy').textContent        = ri.filter(x=>x.status==='busy').length;
+    k('k-charging').textContent    = ri.filter(x=>x.status==='charging').length;
+    k('k-retiring').textContent    = ri.filter(x=>x.status==='retiring').length;
+    k('k-pending').textContent     = cnt(di,'pending') + cnt(di,'assigned');
+
+    // ==== Se un delivery_id è delivered adesso ma non prima, prende il drone_id e lo inserisce in flashPurple (la mappa lo mostrerà viola per FLASH_MS) ====
+    const deliveredNow = new Set(di.filter(d=>d.status==='delivered').map(d=>d.id));
+    for (const did of deliveredNow){
+      if (!lastDeliveredIds.has(did)){
+        const rec = di.find(x=>x.id===did);
+        if (rec && rec.drone_id){
+          flashPurple.add(rec.drone_id);
+          setTimeout(()=>flashPurple.delete(rec.drone_id), FLASH_MS);
+        }
+      }
+    }
+    lastDeliveredIds = deliveredNow;
+
+    // ==== Aggiorna la mappa Leaflet: marker dei droni, colori in base allo stato, tratteggi della scia (chiamando la funzione apposita)====
+    try { updateDronesOnMap(ri); } catch(e) {
+      console.warn('map update failed:', e);
+    }
+
+    // ==== Deliveries (ultime 30) ====
+    const tdel = document.getElementById('tbl-del');
+    tdel.innerHTML = '';
+    const diVisible = (di || []).filter(d => d.status !== 'delivered' && d.status !== 'pending'); // <-- filtro
+    diVisible.slice(-30).reverse().forEach(d=>{
+      const tr = document.createElement('tr');
+      const st = clsStatus(d.status);
+      const t  = d.timestamp ? new Date(d.timestamp*1000).toLocaleTimeString() : '—';
+      tr.innerHTML = `
+        <td class="nowrap" title="${d.id}">${fmtId(d.id)}</td>
+        <td><span class="badge ${st}">${d.status}</span> ${d.leg ? `<span class="small">(${d.leg})</span>` : ''}</td>
+        <td>${d.drone_id||''}</td>
+        <td>${d.weight??''}</td>
+        <td>${t}</td>
+        <td>${d.origin_zone||'—'}</td>
+        <td>${d.destination_zone||'—'}</td>`;
+      tdel.appendChild(tr);
+    });
+
+    // ==== Drones ====
+    const tdr = document.getElementById('tbl-dr');
+    tdr.innerHTML = '';
+    ri.forEach(dr=>{
+      const pos = dr.pos||{};
+      const bat = Math.round(num(dr.battery));
+      const st  = clsStatus(dr.status);
+      const cur = dr.current_delivery||'';
+      const typ = dr.type || '—';
+      const z   = dr.zone || '—';
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="nowrap" title="${dr.id}">${fmtId(dr.id)}</td>
+        <td>${typ}</td>
+        <td>${z}</td>
+        <td class="${st}">${dr.status}</td>
+        <td>${bat}%</td>
+        <td class="small">${cur?fmtId(cur):''}</td>
+        <td>${pos.lat?.toFixed ? pos.lat.toFixed(5):''}</td>
+        <td>${pos.lon?.toFixed ? pos.lon.toFixed(5):''}</td>`;
+      tdr.appendChild(tr);
+    });
+
+    // timestamp ultimo refresh + stato connessione
+    const now = new Date();
+    document.getElementById('last-refresh').textContent =
+      now.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+    const conn = document.getElementById('conn');
+    conn.textContent = 'OK';
+    conn.classList.remove('conn-bad'); conn.classList.add('conn-ok');
+
+  }catch(e){
+    console.error('refresh error', e);
+    showErr(`Errore aggiornamento: ${e.message}`);
+    const conn = document.getElementById('conn');
+    conn.textContent = 'ERR';
+    conn.classList.remove('conn-ok'); conn.classList.add('conn-bad');
+  }
+}
+load();
+setInterval(()=>load(false), 750);
+</script>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script>
+// ====== LEAFLET MAP ======
+let lmap, zoneLayer, droneLayer, chargeLayer, trackLayer, zoneCfg = null;
+const droneMarkers   = {};
+const droneTracks    = {};   // id -> [[lat,lon],...]
+const dronePolylines = {};   // id -> L.polyline
+
+// colori stati
+const STATUS_COLOR = {
+  idle: '#22c55e',      // verde
+  busy: '#60a5fa',      // blu
+  charging: '#f59e0b',  // giallo
+  retiring: '#9ca3af'   // grigio
+};
+const FLASH_COLOR = '#a78bfa'; // viola 1s su delivery
+const TYPE_RADIUS  = { light: 6, medium: 7, heavy: 8 };
+const TRAIL_MAX_POINTS = 30;
+
+// ADDED: usa l'API base configurata sopra
+async function ensureMapReady(){
+  if (lmap) return;
+  const zr = await fetch(`${API}/zones`);
+  if (!zr.ok) throw new Error('zones_config non disponibile');
+  zoneCfg = await zr.json();
+
+  lmap = L.map('lmap', { zoomControl: true, attributionControl: true });
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+    maxZoom: 19, attribution: '&copy; OpenStreetMap'
+  }).addTo(lmap);
+
+  zoneLayer  = L.layerGroup().addTo(lmap);
+  droneLayer = L.layerGroup().addTo(lmap);
+  chargeLayer= L.layerGroup().addTo(lmap);
+  trackLayer = L.layerGroup().addTo(lmap);
+
+  const b = zoneCfg.bounds;
+  const bounds = L.latLngBounds([ [b.lat_min, b.lon_min], [b.lat_max, b.lon_max] ]);
+  lmap.fitBounds(bounds, { padding: [10,10] });
+
+  drawZones();
+  drawChargePoints();
+}
+
+function drawZones(){
+  zoneLayer.clearLayers();
+  if (!zoneCfg) return;
+  for (const z of zoneCfg.zones){
+    const b = z.bounds;
+    L.rectangle([[b.lat_min, b.lon_min],[b.lat_max, b.lon_max]], {
+      weight: 1, color: '#4b5563', fill: false
+    }).addTo(zoneLayer);
+    const cLat = (b.lat_min + b.lat_max)/2, cLon = (b.lon_min + b.lon_max)/2;
+    L.tooltip({permanent:true, direction:'center', className:'zlabel'})
+      .setContent(z.name)
+      .setLatLng([cLat, cLon])
+      .addTo(zoneLayer);
+  }
+}
+
+function drawChargePoints(){
+  chargeLayer.clearLayers();
+  if (!zoneCfg) return;
+  const half = 0.0001; // ~11m
+  for (const z of zoneCfg.zones){
+    const cp = z.charge;
+    if (!cp) continue;
+    L.rectangle([[cp.lat - half, cp.lon - half],[cp.lat + half, cp.lon + half]], {
+      weight: 1, color: '#000', fill: true, fillOpacity: 1.0
+    }).addTo(chargeLayer).bindTooltip(`Charge • ${z.name}`, {permanent:false});
+  }
+}
+
+function updateDronesOnMap(drones){
+  if (!lmap) return;
+  const idsNow = new Set();
+
+  for (const dr of drones){
+    if (!dr.pos) continue;
+    const id = dr.id, lat = dr.pos.lat, lon = dr.pos.lon;
+    const st = dr.status || 'idle';
+
+    // INACTIVE → rimuovi marker e traccia e non disegnare
+    if (st === 'inactive'){
+      if (droneMarkers[id]) { droneLayer.removeLayer(droneMarkers[id]); delete droneMarkers[id]; }
+      if (dronePolylines[id]) { trackLayer.removeLayer(dronePolylines[id]); delete dronePolylines[id]; }
+      delete droneTracks[id];
+      continue;
+    }
+
+    idsNow.add(id);
+
+    // Colore base per stato (override viola se in flash)
+    let color = STATUS_COLOR[st] || '#e5e7eb';
+    if (window.flashPurple && window.flashPurple.has(id)) color = FLASH_COLOR;
+
+    const radius = TYPE_RADIUS[dr.type] || 6;
+
+    // Marker
+    let m = droneMarkers[id];
+    if (!m){
+      m = L.circleMarker([lat, lon], {
+        radius, color, fillColor: color, fillOpacity: 0.9, weight: 1
+      }).addTo(droneLayer);
+      m.bindTooltip(`${id} • ${dr.type||'?'}/${dr.zone||'?'}/${st}`, {permanent:false});
+      droneMarkers[id] = m;
+    } else {
+      m.setLatLng([lat, lon]);
+      m.setStyle({ radius, color, fillColor: color });
+      m.setTooltipContent(`${id} • ${dr.type||'?'}/${dr.zone||'?'}/${st}`);
+    }
+
+    // Traccia tratteggiata
+    const pts = (droneTracks[id] = droneTracks[id] || []);
+    pts.push([lat, lon]);
+    if (pts.length > TRAIL_MAX_POINTS) pts.shift();
+
+    let pl = dronePolylines[id];
+    if (!pl){
+      pl = L.polyline(pts, { weight: 2, opacity: 0.8, dashArray: '4,6' }).addTo(trackLayer);
+      dronePolylines[id] = pl;
+    } else {
+      pl.setLatLngs(pts);
+    }
+  }
+
+  // Cleanup droni scomparsi
+  for (const id of Object.keys(droneMarkers)){
+    if (!idsNow.has(id)){
+      droneLayer.removeLayer(droneMarkers[id]);
+      delete droneMarkers[id];
+    }
+  }
+  for (const id of Object.keys(dronePolylines)){
+    if (!idsNow.has(id)){
+      trackLayer.removeLayer(dronePolylines[id]);
+      delete dronePolylines[id];
+    }
+  }
+  for (const id of Object.keys(droneTracks)){
+    if (!idsNow.has(id)){
+      delete droneTracks[id];
+    }
+  }
+}
+
+// esponi il set flashPurple al scope della mappa
+window.flashPurple = flashPurple;
+</script>
+</body>
+</html>
